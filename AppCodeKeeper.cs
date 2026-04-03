@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 namespace MauiNativeAotQuirks;
 
@@ -17,32 +18,53 @@ public static class AppCodeKeeper
         CodeKeeper.Keep<Components.Layout.NavMenu>();
 
         // BlazorWebView IPC JSON serialization types (string-based Keep for internal types).
-        // Type erasure notes:
-        // - All ref-type args share via __Canon, so we use object where possible
-        // - KeyValuePair<string, RefType> erases to KeyValuePair<__Canon, __Canon>
-        //   → one call covers both KVP<string, JSComponentParameter[]> and KVP<string, List<string>>
-        // - IEnumerable<KVP>/IReadOnlyCollection<KVP>/ICollection<KVP> are all ref types
-        //   → share via __Canon as TCollection, so one IEnumerableOfTConverter call covers all variants
-        // - Enums and char are value types → each needs its own call
+        // All const string concatenation is folded at compile time → IL contains literal strings.
+        // Type erasure: all ref-type args share via __Canon, so we use object where possible.
+        // KeyValuePair<string, RefType> erases to KeyValuePair<__Canon, __Canon>
+        //   → one call covers both KVP<string, JSComponentParameter[]> and KVP<string, List<string>>.
+        // IEnumerable<KVP>/IReadOnlyCollection<KVP> share as TCollection via __Canon.
+        // Enums/char/JsonElement are value types → each needs its own call.
 
-        // ArrayConverter: JsonElement is a struct, needs specific instantiation
-        CodeKeeper.Keep("System.Text.Json.Serialization.Converters.ArrayConverter`2[[System.Text.Json.JsonElement[], System.Text.Json],[System.Text.Json.JsonElement, System.Text.Json]], System.Text.Json");
+        // Assemblies
+        const string aCoreLib = "System.Private.CoreLib";
+        const string aJson = "System.Text.Json";
+        const string aRuntime = "System.Runtime";
+        const string aJSInterop = "Microsoft.JSInterop";
 
-        // EnumConverters: enums are value types, each needs specific instantiation
-        CodeKeeper.Keep("System.Text.Json.Serialization.Converters.EnumConverter`1[[Microsoft.JSInterop.JSCallResultType, Microsoft.JSInterop]], System.Text.Json");
-        CodeKeeper.Keep("System.Text.Json.Serialization.Converters.EnumConverter`1[[Microsoft.JSInterop.Infrastructure.JSCallType, Microsoft.JSInterop]], System.Text.Json");
+        // Converter open generic type names
+        const string tArrayConverter = "System.Text.Json.Serialization.Converters.ArrayConverter`2";
+        const string tEnumConverter = "System.Text.Json.Serialization.Converters.EnumConverter`1";
+        const string tObjectDefaultConverter = "System.Text.Json.Serialization.Converters.ObjectDefaultConverter`1";
+        const string tIEnumerableOfTConverter = "System.Text.Json.Serialization.Converters.IEnumerableOfTConverter`2";
+        const string tICollectionOfTConverter = "System.Text.Json.Serialization.Converters.ICollectionOfTConverter`2";
+        const string tKvp = "System.Collections.Generic.KeyValuePair`2";
 
-        // ObjectDefaultConverter for KeyValuePair<string, object>: covers all KVP<string, RefType> via __Canon
-        CodeKeeper.Keep("System.Text.Json.Serialization.Converters.ObjectDefaultConverter`1[[System.Collections.Generic.KeyValuePair`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]], System.Text.Json");
+        // Assembly-qualified type refs (for use as generic args)
+        const string qObject = "System.Object, " + aCoreLib;
+        const string qChar = "System.Char, " + aCoreLib;
+        const string qJsonElement = "System.Text.Json.JsonElement, " + aJson;
+        const string qJSCallResultType = "Microsoft.JSInterop.JSCallResultType, " + aJSInterop;
+        const string qJSCallType = "Microsoft.JSInterop.Infrastructure.JSCallType, " + aJSInterop;
 
-        // IEnumerableOfTConverter for IEnumerable<char>: char is a value type
-        CodeKeeper.Keep("System.Text.Json.Serialization.Converters.IEnumerableOfTConverter`2[[System.Collections.Generic.IEnumerable`1[[System.Char, System.Private.CoreLib]], System.Runtime],[System.Char, System.Private.CoreLib]], System.Text.Json");
+        // Composed assembly-qualified types
+        const string qKvp = tKvp + "[[" + qObject + "],[" + qObject + "]], " + aCoreLib;
+        const string qIEnumerableOfChar = "System.Collections.Generic.IEnumerable`1[[" + qChar + "]], " + aRuntime;
+        const string qIEnumerableOfKvp = "System.Collections.Generic.IEnumerable`1[[" + qKvp + "]], " + aRuntime;
+        const string qICollectionOfKvp = "System.Collections.Generic.ICollection`1[[" + qKvp + "]], " + aRuntime;
 
-        // IEnumerableOfTConverter for KVP<string, object>: covers IEnumerable/IReadOnlyCollection variants
-        // for both KVP<string, JSComponentParameter[]> and KVP<string, List<string>> via __Canon
-        CodeKeeper.Keep("System.Text.Json.Serialization.Converters.IEnumerableOfTConverter`2[[System.Collections.Generic.IEnumerable`1[[System.Collections.Generic.KeyValuePair`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]], System.Runtime],[System.Collections.Generic.KeyValuePair`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]], System.Text.Json");
-
-        // ICollectionOfTConverter for KVP<string, object>: same __Canon reasoning
-        CodeKeeper.Keep("System.Text.Json.Serialization.Converters.ICollectionOfTConverter`2[[System.Collections.Generic.ICollection`1[[System.Collections.Generic.KeyValuePair`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]], System.Runtime],[System.Collections.Generic.KeyValuePair`2[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]], System.Text.Json");
+        // ArrayConverter<JsonElement[], JsonElement>
+        CodeKeeper.Keep<JsonElement>();
+        CodeKeeper.Keep(tArrayConverter + "[[" + qObject + "],[" + qJsonElement + "]], " + aJson);
+        // EnumConverter<JSCallResultType>, EnumConverter<JSCallType>
+        CodeKeeper.Keep(tEnumConverter + "[[" + qJSCallResultType + "]], " + aJson);
+        CodeKeeper.Keep(tEnumConverter + "[[" + qJSCallType + "]], " + aJson);
+        // ObjectDefaultConverter<KVP<object, object>>
+        CodeKeeper.Keep(tObjectDefaultConverter + "[[" + qKvp + "]], " + aJson);
+        // IEnumerableOfTConverter<IEnumerable<char>, char>
+        CodeKeeper.Keep(tIEnumerableOfTConverter + "[[" + qIEnumerableOfChar + "],[" + qChar + "]], " + aJson);
+        // IEnumerableOfTConverter<IEnumerable<KVP>, KVP>
+        CodeKeeper.Keep(tIEnumerableOfTConverter + "[[" + qIEnumerableOfKvp + "],[" + qKvp + "]], " + aJson);
+        // ICollectionOfTConverter<ICollection<KVP>, KVP>
+        CodeKeeper.Keep(tICollectionOfTConverter + "[[" + qICollectionOfKvp + "],[" + qKvp + "]], " + aJson);
     }
 }
